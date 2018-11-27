@@ -106,3 +106,9 @@ func Marshall(s *states.State) ([]byte, error) {
 	ret, err := json.Marshal(output)
 	return ret, err
 }
+
+// jbardin [7:50 AM] `SchemaVersion` comes from the provider. It's recorded so
+// that the provider can know how to upgrade the schema of a resource.
+// I'm looking to see where it ends up through core. It comes back in the
+// `providers.Schema` type
+// ah, state stores it in the `ResourceInstanceObjectSrc`

@@ -14,9 +14,9 @@ type module struct {
 }
 
 type moduleCall struct {
-	ResolvedSource    string      `json:"resolved_source,omitempty"`
-	Expressions       expressions `json:"expressions,omitempty"`
-	CountExpression   expression  `json:"count_expression,omitempty"`
-	ForEachExpression expression  `json:"for_each_expression,omitempty"`
-	Module            module      `json:"module,omitempty"`
+	ResolvedSource    string                 `json:"resolved_source,omitempty"`
+	Expressions       map[string]interface{} `json:"expressions,omitempty"`
+	CountExpression   expression             `json:"count_expression,omitempty"`
+	ForEachExpression expression             `json:"for_each_expression,omitempty"`
+	Module            module                 `json:"module,omitempty"`
 }

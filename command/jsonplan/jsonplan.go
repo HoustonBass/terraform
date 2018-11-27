@@ -86,12 +86,12 @@ func Marshal(
 
 	output := newPlan()
 
-	err := output.marshalConfig(snap)
+	err := output.marshalConfig(snap, schemas)
 	if err != nil {
 		return nil, err
 	}
 
-	err = output.marshalOutputChanges(p.Changes, schemas)
+	err = output.marshalOutputChanges(p.Changes)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +184,7 @@ func (p *plan) marshalResourceChanges(changes *plans.Changes, schemas *terraform
 	return nil
 }
 
-func (p *plan) marshalOutputChanges(changes *plans.Changes, schemas *terraform.Schemas) error {
+func (p *plan) marshalOutputChanges(changes *plans.Changes) error {
 	if changes == nil {
 		// Nothing to do!
 		return nil

@@ -1,10 +1,9 @@
 package jsonplan
 
 import (
+	"github.com/hashicorp/terraform/configs"
 	"github.com/hashicorp/terraform/configs/configload"
-	"github.com/hashicorp/terraform/lang"
-	"github.com/zclconf/go-cty/cty"
-	ctyjson "github.com/zclconf/go-cty/cty/json"
+	"github.com/hashicorp/terraform/terraform"
 )
 
 // Config represents the complete configuration source
@@ -18,10 +17,10 @@ type config struct {
 // provider configurations are the one concept in Terraform that can span across
 // module boundaries.
 type providerConfig struct {
-	Name          string      `json:"name,omitempty"`
-	Alias         string      `json:"alias,omitempty"`
-	ModuleAddress string      `json:"module_address,omitempty"`
-	Expressions   expressions `json:"expressions,omitempty"`
+	Name          string                 `json:"name,omitempty"`
+	Alias         string                 `json:"alias,omitempty"`
+	ModuleAddress string                 `json:"module_address,omitempty"`
+	Expressions   map[string]interface{} `json:"expressions,omitempty"`
 }
 
 type configRootModule struct {
@@ -51,7 +50,7 @@ type configResource struct {
 
 	// Expressions" describes the resource-type-specific  content of the
 	// configuration block.
-	Expressions expressions `json:"expressions,omitempty"`
+	Expressions map[string]interface{} `json:"expressions,omitempty"`
 	// SchemaVersion indicates which version of the resource type schema the
 	// "values" property conforms to.
 	SchemaVersion int `json:"schema_version,omitempty"`
@@ -59,7 +58,7 @@ type configResource struct {
 	// CountExpression and ForEachExpression describe the expressions given for
 	// the corresponding meta-arguments in the resource configuration block.
 	// These are omitted if the corresponding argument isn't set.
-	CountExpression   expression `json:"count_expression"`
+	CountExpression   expression `json:"count_expression,omitempty"`
 	ForEachExpression expression `json:"for_each_expression,omitempty"`
 }
 
@@ -69,69 +68,18 @@ type configOutput struct {
 }
 
 type provisioner struct {
-	Name        string      `json:"name,omitempty"`
-	Expressions expressions `json:"expressions,omitempty"`
+	Name        string                 `json:"name,omitempty"`
+	Expressions map[string]interface{} `json:"expressions,omitempty"`
 }
 
-func (p *plan) marshalConfig(snap *configload.Snapshot) error {
+func (p *plan) marshalConfig(snap *configload.Snapshot, schemas *terraform.Schemas) error {
 	configLoader := configload.NewLoaderFromSnapshot(snap)
 	c, diags := configLoader.LoadConfig(snap.Modules[""].Dir)
 	if diags.HasErrors() {
 		return diags
 	}
 
-	var rs []configResource
-	for _, v := range c.Module.ManagedResources {
-		r := configResource{
-			Address:           v.Addr().String(),
-			Mode:              v.Mode.String(),
-			Type:              v.Type,
-			Name:              v.Name,
-			ProviderConfigKey: v.ProviderConfigAddr().String(),
-			// SchemaVersion:
-			// Expressions:
-		}
-		rs = append(rs, r)
-	}
-	for _, v := range c.Module.DataResources {
-		r := configResource{
-			Address:           v.Addr().String(),
-			Mode:              v.Mode.String(),
-			Type:              v.Type,
-			Name:              v.Name,
-			ProviderConfigKey: v.ProviderConfigRef.Name,
-			// SchemaVersion:
-			// Expressions:
-		}
-		rs = append(rs, r)
-	}
-	p.Config.RootModule.Resources = rs
-
-	outputs := make(map[string]configOutput)
-	for _, v := range c.Module.Outputs {
-		// Is there a context I should be using here?
-		val, _ := v.Expr.Value(nil)
-		var ex expression
-		if val != cty.NilVal {
-			valJSON, _ := ctyjson.Marshal(val, val.Type())
-			ex.ConstantValue = valJSON
-		}
-
-		vars, _ := lang.ReferencesInExpr(v.Expr)
-		var varString []string
-		for _, v := range vars {
-			varString = append(varString, v.Subject.String())
-		}
-		ex.References = varString
-
-		outputs[v.Name] = configOutput{
-			Sensitive:  v.Sensitive,
-			Expression: ex,
-		}
-	}
-	p.Config.RootModule.Outputs = outputs
-
-	// this is not accurate provider marshalling, just a placeholder
+	// FIXME: this is not accurate provider marshaling, just a placeholder
 	var pcs []providerConfig
 	providers := c.ProviderTypes()
 	for p := range providers {
@@ -140,8 +88,96 @@ func (p *plan) marshalConfig(snap *configload.Snapshot) error {
 		}
 		pcs = append(pcs, pc)
 	}
-
 	p.Config.ProviderConfigs = pcs
+	p.Config.RootModule = marshalRootModule(c.Module, schemas)
 
 	return nil
+}
+
+func marshalRootModule(m *configs.Module, schemas *terraform.Schemas) configRootModule {
+	var module configRootModule
+	var rs []configResource
+	for _, v := range m.ManagedResources {
+		r := configResource{
+			Address:           v.Addr().String(),
+			Mode:              v.Mode.String(),
+			Type:              v.Type,
+			Name:              v.Name,
+			ProviderConfigKey: v.ProviderConfigAddr().String(),
+			// FIXME: the current plan is to refactor `Schemas.ResourceTypeConfig`
+			// to also return the version
+			SchemaVersion: 0,
+		}
+
+		cExp := marshalExpression(v.Count)
+		if !cExp.Empty() {
+			r.CountExpression = cExp
+		} else {
+			fExp := marshalExpression(v.ForEach)
+			if !fExp.Empty() {
+				r.ForEachExpression = fExp
+			}
+		}
+
+		//r.Expressions
+		// var exs expressions
+		// schema := schemas.ResourceTypeConfig(v.ProviderConfigAddr().String(), v.Type)
+		rs = append(rs, r)
+
+		// r.Provisioners
+		var provisioners []provisioner
+		for _, p := range v.Managed.Provisioners {
+			schema := schemas.ProvisionerConfig(p.Type)
+			prov := provisioner{
+				Name:        p.Type,
+				Expressions: marshalExpressions(p.Config, schema),
+			}
+			provisioners = append(provisioners, prov)
+		}
+		r.Provisioners = provisioners
+	}
+
+	for _, v := range m.DataResources {
+		r := configResource{
+			Address:           v.Addr().String(),
+			Mode:              v.Mode.String(),
+			Type:              v.Type,
+			Name:              v.Name,
+			ProviderConfigKey: v.ProviderConfigRef.Name,
+			// FIXME: the current plan is to refactor `Schemas.ResourceTypeConfig`
+			// to also return the version
+			SchemaVersion: 0,
+		}
+		rs = append(rs, r)
+	}
+	module.Resources = rs
+
+	outputs := make(map[string]configOutput)
+	for _, v := range m.Outputs {
+		outputs[v.Name] = configOutput{
+			Sensitive:  v.Sensitive,
+			Expression: marshalExpression(v.Expr),
+		}
+	}
+	module.Outputs = outputs
+
+	var mcs []moduleCall
+	for _, v := range m.ModuleCalls {
+		mc := moduleCall{
+			ResolvedSource: v.SourceAddr,
+		}
+		cExp := marshalExpression(v.Count)
+		if !cExp.Empty() {
+			mc.CountExpression = cExp
+		} else {
+			fExp := marshalExpression(v.ForEach)
+			if !fExp.Empty() {
+				mc.ForEachExpression = fExp
+			}
+		}
+		mcs = append(mcs, mc)
+	}
+
+	module.ModuleCalls = mcs
+	return module
 }

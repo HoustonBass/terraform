@@ -29,6 +29,8 @@ func (c *ShowCommand) Run(args []string) int {
 	}
 
 	cmdFlags := c.Meta.defaultFlagSet("show")
+	var jsonOutput bool
+	cmdFlags.BoolVar(&jsonOutput, "json", false, "produce JSON output (only available when showing a planfile)")
 	cmdFlags.Usage = func() { c.Ui.Error(c.Help()) }
 	if err := cmdFlags.Parse(args); err != nil {
 		return 1
